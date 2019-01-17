@@ -1,3 +1,6 @@
+
+'use strict'
+
 const express = require('express')
 // jsonwebtoken docs: https://github.com/auth0/node-jsonwebtoken
 const crypto = require('crypto')
@@ -9,13 +12,22 @@ const bcrypt = require('bcrypt')
 // see above for explanation of "salting", 10 rounds is recommended
 const bcryptSaltRounds = 10
 
-// pull in error types and the logic to handle them and set status codes
-const errors = require('../../lib/custom_errors')
 const handle = require('../../lib/error_handler')
+// this is a collection of methods that help us detect situations when we need
+// to throw a custom error
+const customErrors = require('../../lib/custom_errors')
 
-const BadParamsError = errors.BadParamsError
-const BadCredentialsError = errors.BadCredentialsError
+// we'll use this function to send 404 when non-existant document is requested
+const handle404 = customErrors.handle404
+// we'll use this function to send 401 when a user tries to modify a resource
+// that's owned by someone else
+// const requireOwnership = customErrors.requireOwnership
+const BadParamsError = require('../../lib/custom_errors').BadParamsError
 
+// checks to see if the requesting user's id matches the id of the user they are trying to update
+const validateUser = customErrors.validateUser
+
+// loads in User class from the models folder
 const User = require('../models/user')
 
 // passing this as a second argument to `router.<verb>` will make it
@@ -46,7 +58,8 @@ router.post('/sign-up', (req, res) => {
       // return necessary params to create a user
       return {
         email: req.body.credentials.email,
-        hashedPassword: hash
+        hashedPassword: hash,
+        nickname: req.body.nickname
       }
     })
     // create user with provided email and hashed password
@@ -67,9 +80,9 @@ router.post('/sign-in', (req, res) => {
   // find a user based on the email that was passed
   User.findOne({ email: req.body.credentials.email })
     .then(record => {
-      // if we didn't find a user with that email, send 401
+      // if we didn't find a user with that email, send 422
       if (!record) {
-        throw new BadCredentialsError()
+        throw new BadParamsError()
       }
       // save the found user outside the promise chain
       user = record
@@ -87,8 +100,8 @@ router.post('/sign-in', (req, res) => {
         return user.save()
       } else {
         // throw an error to trigger the error handler and end the promise chain
-        // this will send back 401 and a message about sending wrong parameters
-        throw new BadCredentialsError()
+        // this will send back 422 and a message about sending wrong parameters
+        throw new BadParamsError()
       }
     })
     .then(user => {
@@ -139,4 +152,40 @@ router.delete('/sign-out', requireToken, (req, res) => {
     .catch(err => handle(err, res))
 })
 
+// UPDATE
+// PATCH - nickname and profile picture
+// NEED TO CHECK: params validation
+router.patch('/users/:id', requireToken, (req, res) => {
+  // if the client attempts to change the `owner` property by including a new
+  // owner, prevent that by deleting that key/value pair
+  delete req.body.user.owner
+
+  User.findById(req.params.id)
+    .then(handle404)
+    .then(user => {
+      // console.log(`user is`, user)
+      // pass the `req` object and the Mongoose record to `requireOwnership`
+      // it will throw an error if the current user isn't the owner
+      // requireOwnership(req, user)
+      // discarding requireOwnership because a user cannot own themselves,
+      // creating new function validateUser to handle this
+      validateUser(req, user)
+
+      // the client will often send empty strings for parameters that it does
+      // not want to update. We delete any key/value pair where the value is
+      // an empty string before updating
+      Object.keys(req.body.user).forEach(key => {
+        if (req.body.user[key] === '') {
+          delete req.body.user[key]
+        }
+      })
+
+      // pass the result of Mongoose's `.update` to the next `.then`
+      return user.update(req.body.user)
+    })
+    // if that succeeded, return 204 and no JSON
+    .then(() => res.sendStatus(204))
+    // if an error occurs, pass it to the handler
+    .catch(err => handle(err, res))
+})
 module.exports = router
