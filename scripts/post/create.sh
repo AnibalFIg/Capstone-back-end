@@ -10,6 +10,8 @@ curl "${API}${URL_PATH}" \
   --header "Authorization: Bearer ${TOKEN}" \
   --data '{
     "post": {
+      "title": "'"${TITLE}"'",
+      "studio": "'"${STUDIO}"'",
       "text": "'"${TEXT}"'"
     }
   }'
